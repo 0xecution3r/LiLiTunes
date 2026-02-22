@@ -1,0 +1,11 @@
+prefix=/home/some0nee/ios-legacy
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libtatsu
+Description: Tatsu Signing Server library for handling idevice personalization
+Version: 1.0.3
+Libs: -L${libdir} -ltatsu
+Cflags: -I${includedir}
+Requires: libplist-2.0 >= 2.6.0

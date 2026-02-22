@@ -1,0 +1,17 @@
+[package]
+name = "gtkpod-modern"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+adw = { version = "0.8.1", package = "libadwaita" }
+anyhow = "1.0.101"
+gio = "0.21.5"
+glib = "0.21.5"
+gstreamer = "0.24.4"
+gstreamer-play = "0.24.4"
+gtk = { version = "0.10.3", package = "gtk4" }
+lofty = "0.23.2"
+rusqlite = { version = "0.38.0", features = ["bundled"] }
+thiserror = "2.0.18"
+tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros"] }
