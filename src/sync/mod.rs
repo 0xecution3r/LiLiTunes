@@ -15,6 +15,8 @@ use std::rc::Rc;
 
 use crate::ui::{self, UiHandles};
 
+pub mod device_ids;
+
 pub fn wire_sync_button(ui: &UiHandles) {
     // Clone widgets we need inside callbacks
     let button = ui.sync_ipod_button.clone();
@@ -34,11 +36,23 @@ pub fn wire_sync_button(ui: &UiHandles) {
             let mountpoint = ui::text::SYNC_IFUSE_MOUNTPOINT;
             let media_path = ui::text::SYNC_IPOD_MEDIA_PATH;            
             let db_path = ui::text::SYNC_DEFAULT_DB_PATH;
-            
+            let usb_present = usb_present_lsusb();
+        if is_mount_stale(mountpoint) {
+            let _ = unmount_fuse(mountpoint);
+        }
+        let legacy_visible = if usb_present {
+            legacy_device_visible()
+        } else {
+            false
+        };
+
             if let Err(e) = ensure_ipod_mounted(mountpoint) {
                 let _ = tx.send(SyncMsg::Error(e));
                 return;
             }           
+
+            // Helper wants the folder that CONTAINS iTunes_Control (Media)
+            //let media_path = format!("{}/var/mobile/Media", mount_path);
 
             let mut child = match Command::new(ui::text::SYNC_HELPER_PATH)
                 .arg(ui::text::SYNC_ARG_MOUNT)
@@ -145,7 +159,11 @@ pub fn start_device_watch(ui: &UiHandles) {
 
         if legacy_visible {
             sync_btn.set_sensitive(true);
-            now_lbl.set_label(crate::ui::text::IPOD_STATUS_CONNECTED);
+            if let Some(model) = ipod_model_from_lsusb() {
+    now_lbl.set_label(&format!("{} Detected!", model));
+} else {
+    now_lbl.set_label(crate::ui::text::IPOD_STATUS_CONNECTED);
+}
         } else {
             sync_btn.set_sensitive(false);
 
@@ -166,19 +184,87 @@ pub fn start_device_watch(ui: &UiHandles) {
     });
 }
 
-fn ipod_present() -> bool {
-    // Run: lsusb
-    let out = Command::new("lsusb").output();
-    let Ok(out) = out else {
-        return false;
-    };
-    if !out.status.success() {
+fn is_mount_stale(mount_path: &str) -> bool {
+    let mp = std::path::Path::new(mount_path);
+
+    // If mountpoint doesn't exist or isn't a dir, it's not a stale mount we can unmount.
+    if !mp.exists() || !mp.is_dir() {
         return false;
     }
 
-    let s = String::from_utf8_lossy(&out.stdout);
-    s.to_lowercase().contains(crate::ui::text::IPOD_USB_ID)
+    // If it's not mounted, it's not "stale mounted".
+    if !is_mounted(mount_path) {
+        return false;
+    }
+
+    // Heuristic: if basic listing fails, FUSE is often stale.
+    // Also: stale FUSE mounts commonly cause PermissionDenied or Other errors.
+    match std::fs::read_dir(mp) {
+        Ok(_) => false,
+        Err(_) => true,
+    }
 }
+
+fn is_mounted(mount_path: &str) -> bool {
+    // Check /proc/self/mounts for an exact mountpoint match
+    let mounts = std::fs::read_to_string("/proc/self/mounts");
+    let Ok(mounts) = mounts else { return false; };
+
+    for line in mounts.lines() {
+        // format: <src> <target> <fstype> <opts> ...
+        let mut it = line.split_whitespace();
+        let _src = it.next();
+        let target = it.next();
+        if let Some(target) = target {
+            if target == mount_path {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn unmount_fuse(mount_path: &str) -> Result<(), String> {
+    // Prefer fusermount3, fallback to fusermount
+    let status3 = std::process::Command::new("fusermount3")
+        .arg("-u")
+        .arg(mount_path)
+        .status();
+
+    match status3 {
+        Ok(s) if s.success() => return Ok(()),
+        _ => {}
+    }
+
+    let status = std::process::Command::new("fusermount")
+        .arg("-u")
+        .arg(mount_path)
+        .status()
+        .map_err(|e| format!("fusermount spawn failed: {}", e))?;
+
+    if !status.success() {
+        return Err(format!("fusermount failed: {}", status));
+    }
+
+    Ok(())
+}
+//fn ipod_present() -> bool {
+//    // Run: lsusb
+//    let out = Command::new("lsusb").output();
+//    let Ok(out) = out else {
+//        return false;
+//    };
+//    if !out.status.success() {
+//        return false;
+//    }//
+
+//    let s = String::from_utf8_lossy(&out.stdout);
+//    let s = s.to_lowercase();//
+
+//    crate::sync::device_ids::IPOD_USB_ID
+//        .iter()
+//        .any(|id| s.contains(id))
+//}
 
 fn legacy_prefix_from_repo() -> Option<PathBuf> {
     // When running `cargo run`, current_dir is usually the repo root.
@@ -228,32 +314,52 @@ fn legacy_cmd(program_name: &str) -> Option<Command> {
 }
 
 fn ensure_ipod_mounted(mount_path: &str) -> Result<(), String> {
-    // 1) Make sure mount dir exists
-let mp = std::path::Path::new(mount_path);
+    // 0) If the mountpoint is stale (EIO), force-unmount it first.
+    // This happens when the iPod is unplugged while ifuse is mounted.
+    match std::fs::metadata(mount_path) {
+        Ok(_) => {}
+        Err(e) => {
+            // EIO is raw_os_error = 5 on Linux
+            if e.raw_os_error() == Some(5) {
+                let _ = std::process::Command::new("fusermount3")
+                    .arg("-uz")
+                    .arg(mount_path)
+                    .status();
 
-if mp.exists() {
-    // Exists: must be a directory (mountpoint)
-    if !mp.is_dir() {
-        return Err(format!(
-            "Mount path exists but is not a directory: {}",
-            mount_path
-        ));
+                let _ = std::process::Command::new("fusermount")
+                    .arg("-uz")
+                    .arg(mount_path)
+                    .status();
+            }
+        }
     }
-} else {
-    // Does not exist: create it
-    std::fs::create_dir_all(mp)
-        .map_err(|e| format!("create_dir_all({}): {}", mount_path, e))?;
-}
+
+    // 1) Make sure mount dir exists
+    let mp = std::path::PathBuf::from(mount_path);
+
+    match std::fs::create_dir_all(&mp) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            if !mp.is_dir() {
+                return Err(format!(
+                    "Mount path exists but is not a directory: {}",
+                    mount_path
+                ));
+            }
+        }
+        Err(e) => {
+            return Err(format!("create_dir_all({}): {}", mount_path, e));
+        }
+    }
 
     // 2) If it already looks mounted (iPod Touch media has iTunes_Control), do nothing
-let mp = std::path::PathBuf::from(mount_path);
+    let mp = std::path::PathBuf::from(mount_path);
 
-// If already mounted, Media path exists and contains iTunes_Control
-let media = mp.join("var/mobile/Media");
-let itunes_control = media.join("iTunes_Control");
-if itunes_control.exists() {
-    return Ok(());
-}
+    let media = mp.join("var/mobile/Media");
+    let itunes_control = media.join("iTunes_Control");
+    if itunes_control.exists() {
+        return Ok(());
+    }
 
     // 3) Run legacy ifuse: deps/ios-legacy/bin/ifuse --root <mountpoint>
     let mut cmd = legacy_cmd("ifuse").ok_or("legacy_cmd(ifuse) failed")?;
@@ -281,8 +387,31 @@ fn usb_present_lsusb() -> bool {
         return false;
     }
 
-    let s = String::from_utf8_lossy(&out.stdout);
-    s.to_lowercase().contains(crate::ui::text::IPOD_USB_ID)
+let s = String::from_utf8_lossy(&out.stdout);
+let s = s.to_lowercase();
+
+crate::sync::device_ids::IPOD_USB_ID
+    .iter()
+    .any(|(id, model)| s.contains(id))
+}
+
+fn ipod_model_from_lsusb() -> Option<&'static str> {
+    let out = Command::new("lsusb").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+
+    let s = String::from_utf8_lossy(&out.stdout).to_lowercase();
+
+    crate::sync::device_ids::IPOD_USB_ID
+        .iter()
+        .find_map(|(id, model)| {
+            if s.contains(&id.to_lowercase()) {
+                Some(*model)
+            } else {
+                None
+            }
+        })
 }
 
 fn legacy_device_visible() -> bool {

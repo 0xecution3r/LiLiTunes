@@ -1,7 +1,7 @@
 use adw::prelude::*;
 
 use crate::ui::UiHandles;
-
+pub use crate::sync::device_ids::IPOD_USB_ID;
 // ===== Dialog Text Constants =====
 //
 // All human-readable dialog text lives here.
@@ -20,7 +20,7 @@ pub const ADD_FOLDER_SCANNING_LABEL: &str = "Scanning...";
 // ===== App & Error Text =====
 //
 // These keep main.rs free from hardcoded words.
-pub const APP_ID: &str = "com.ghost.gtkpodmodern";
+pub const APP_ID: &str = "com.ghost.lilitunes";
 pub const DB_INIT_FAILED: &str = "DB init failed";
 
 pub const IMPORT_ERROR_PREFIX: &str = "Import error: ";
@@ -53,7 +53,7 @@ pub const SYNC_DONE_LABEL: &str = "iPod sync complete";
 pub const SYNC_ERR_DISCONNECTED_LABEL: &str = "ERROR sync channel disconnected";
 
 // Helper executable + args (still “text.rs” per your rule)
-pub const SYNC_HELPER_PATH: &str = "src/sync/gtkpod-modern-sync-c";
+pub const SYNC_HELPER_PATH: &str = "src/sync/lilitunes-sync-c";
 pub const SYNC_ARG_MOUNT: &str = "--mount";
 pub const SYNC_ARG_SQLITE: &str = "--sqlite";
 
@@ -67,8 +67,6 @@ pub const SYNC_ERR_START: &str = "ERROR failed to start sync helper: ";
 pub const SYNC_ERR_WAIT: &str = "ERROR failed waiting for helper: ";
 pub const SYNC_ERR_EXIT: &str = "ERROR helper exited ";
 
-// ===== iPod Detection (Option 1) =====
-pub const IPOD_USB_ID: &str = "05ac:1291";
 pub const IPOD_STATUS_CONNECTED: &str = "iPod detected";
 pub const IPOD_STATUS_DISCONNECTED: &str = "iPod not detected";
 
@@ -98,11 +96,11 @@ pub const USBMUXD_FIX_OK: &str = "OK";
 // app_ui.rs stays "shapes only".
 pub fn apply_text(ui: &UiHandles) {
     // Window title
-    ui.window.set_title(Some("gtkpod-modern"));
+    ui.window.set_title(Some("LiliTunes"));
 
     // Header title + subtitle
     let title = adw::WindowTitle::builder()
-        .title("gtkpod-modern")
+        .title("LiliTunes")
         .subtitle("Library")
         .build();
     ui.header.set_title_widget(Some(&title));
